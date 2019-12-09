@@ -14,163 +14,131 @@ limitations under the License.
 package v1
 
 import (
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/robfig/cron"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	validationutils "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// +kubebuilder:docs-gen:collapse=Go imports
 
-// +kubebuilder:docs-gen:collapse=Imports
+var cronjoblog = logf.Log.WithName("cronjob-resource")
 
 /*
-First, let's take a look at our spec.  As we discussed before, spec holds
-*desired state*, so any "inputs" to our controller go here.
-Fundamentally a CronJob needs the following pieces:
-- A schedule (the *cron* in CronJob)
-- A template for the Job to run (the
-*job* in CronJob)
-We'll also want a few extras, which will make our users' lives easier:
-- A deadline for starting jobs (if we miss this deadline, we'll just wait till
-  the next scheduled time)
-- What to do if multiple jobs would run at once (do we wait? stop the old one? run both?)
-- A way to pause the running of a CronJob, in case something's wrong with it
-- Limits on old job history
-Remember, since we never read our own status, we need to have some other way to
-keep track of whether a job has run.  We can use at least one old job to do
-this.
-We'll use several markers (`// +comment`) to specify additional metadata.  These
-will be used by [controller-tools](https://github.com/kubernetes-sigs/controller-tools) when generating our CRD manifest.
-As we'll see in a bit, controller-tools will also use GoDoc to form descriptions for
-the fields.
+This setup is doubles as setup for our conversion webhooks: as long as our
+types implement the
+[Hub](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion#Hub) and
+[Convertible](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion#Convertible)
+interfaces, a conversion webhook will be registered.
 */
 
-// CronJobSpec defines the desired state of CronJob
-type CronJobSpec struct {
-	// +kubebuilder:validation:MinLength=0
-
-	// The schedule in Cron format, see https://en.wikipedia.org/wiki/Cron.
-	Schedule string `json:"schedule"`
-
-	// +kubebuilder:validation:Minimum=0
-
-	// Optional deadline in seconds for starting the job if it misses scheduled
-	// time for any reason.  Missed jobs executions will be counted as failed ones.
-	// +optional
-	StartingDeadlineSeconds *int64 `json:"startingDeadlineSeconds,omitempty"`
-
-	// Specifies how to treat concurrent executions of a Job.
-	// Valid values are:
-	// - "Allow" (default): allows CronJobs to run concurrently;
-	// - "Forbid": forbids concurrent runs, skipping next run if previous run hasn't finished yet;
-	// - "Replace": cancels currently running job and replaces it with a new one
-	// +optional
-	ConcurrencyPolicy ConcurrencyPolicy `json:"concurrencyPolicy,omitempty"`
-
-	// This flag tells the controller to suspend subsequent executions, it does
-	// not apply to already started executions.  Defaults to false.
-	// +optional
-	Suspend *bool `json:"suspend,omitempty"`
-
-	// Specifies the job that will be created when executing a CronJob.
-	JobTemplate batchv1beta1.JobTemplateSpec `json:"jobTemplate"`
-
-	// +kubebuilder:validation:Minimum=0
-
-	// The number of successful finished jobs to retain.
-	// This is a pointer to distinguish between explicit zero and not specified.
-	// +optional
-	SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit,omitempty"`
-
-	// +kubebuilder:validation:Minimum=0
-
-	// The number of failed finished jobs to retain.
-	// This is a pointer to distinguish between explicit zero and not specified.
-	// +optional
-	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
+func (r *CronJob) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(r).
+		Complete()
 }
 
 /*
-We define a custom type to hold our concurrency policy.  It's actually
-just a string under the hood, but the type gives extra documentation,
-and allows us to attach validation on the type instead of the field,
-making the validation more easily reusable.
-*/
+ */
+var _ webhook.Defaulter = &CronJob{}
 
-// ConcurrencyPolicy describes how the job will be handled.
-// Only one of the following concurrent policies may be specified.
-// If none of the following policies is specified, the default one
-// is AllowConcurrent.
-// +kubebuilder:validation:Enum=Allow;Forbid;Replace
-type ConcurrencyPolicy string
+// Default implements webhook.Defaulter so a webhook will be registered for the type
+func (r *CronJob) Default() {
+	cronjoblog.Info("default", "name", r.Name)
 
-const (
-	// AllowConcurrent allows CronJobs to run concurrently.
-	AllowConcurrent ConcurrencyPolicy = "Allow"
-
-	// ForbidConcurrent forbids concurrent runs, skipping next run if previous
-	// hasn't finished yet.
-	ForbidConcurrent ConcurrencyPolicy = "Forbid"
-
-	// ReplaceConcurrent cancels currently running job and replaces it with a new one.
-	ReplaceConcurrent ConcurrencyPolicy = "Replace"
-)
-
-/*
-Next, let's design our status, which holds observed state.  It contains any information
-we want users or other controllers to be able to easily obtain.
-We'll keep a list of actively running jobs, as well as the last time that we successfully
-ran our job.  Notice that we use `metav1.Time` instead of `time.Time` to get the stable
-serialization, as mentioned above.
-*/
-
-// CronJobStatus defines the observed state of CronJob
-type CronJobStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// A list of pointers to currently running jobs.
-	// +optional
-	Active []corev1.ObjectReference `json:"active,omitempty"`
-
-	// Information when was the last time the job was successfully scheduled.
-	// +optional
-	LastScheduleTime *metav1.Time `json:"lastScheduleTime,omitempty"`
+	if r.Spec.ConcurrencyPolicy == "" {
+		r.Spec.ConcurrencyPolicy = AllowConcurrent
+	}
+	if r.Spec.Suspend == nil {
+		r.Spec.Suspend = new(bool)
+	}
+	if r.Spec.SuccessfulJobsHistoryLimit == nil {
+		r.Spec.SuccessfulJobsHistoryLimit = new(int32)
+		*r.Spec.SuccessfulJobsHistoryLimit = 3
+	}
+	if r.Spec.FailedJobsHistoryLimit == nil {
+		r.Spec.FailedJobsHistoryLimit = new(int32)
+		*r.Spec.FailedJobsHistoryLimit = 1
+	}
 }
 
-/*
-Finally, we have the rest of the boilerplate that we've already discussed.
-As previously noted, we don't need to change this, except to mark that
-we want a status subresource, so that we behave like built-in kubernetes types.
-*/
+// TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
+// +kubebuilder:webhook:verbs=create;update,path=/validate-batch-tutorial-kubebuilder-io-v1-cronjob,mutating=false,failurePolicy=fail,groups=batch.tutorial.kubebuilder.io,resources=cronjobs,versions=v1,name=vcronjob.kb.io
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
-// +kubebuilder:storageversion
+var _ webhook.Validator = &CronJob{}
 
-// CronJob is the Schema for the cronjobs API
-type CronJob struct {
-	/*
-	 */
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
+func (r *CronJob) ValidateCreate() error {
+	cronjoblog.Info("validate create", "name", r.Name)
 
-	Spec   CronJobSpec   `json:"spec,omitempty"`
-	Status CronJobStatus `json:"status,omitempty"`
+	return r.validateCronJob()
 }
 
-// +kubebuilder:object:root=true
+// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
+func (r *CronJob) ValidateUpdate(old runtime.Object) error {
+	cronjoblog.Info("validate update", "name", r.Name)
 
-// CronJobList contains a list of CronJob
-type CronJobList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []CronJob `json:"items"`
+	return r.validateCronJob()
 }
 
-func init() {
-	SchemeBuilder.Register(&CronJob{}, &CronJobList{})
+// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
+func (r *CronJob) ValidateDelete() error {
+	cronjoblog.Info("validate delete", "name", r.Name)
+
+	// TODO(user): fill in your validation logic upon object deletion.
+	return nil
 }
 
-// +kubebuilder:docs-gen:collapse=Root Object Definitions
+func (r *CronJob) validateCronJob() error {
+	var allErrs field.ErrorList
+	if err := r.validateCronJobName(); err != nil {
+		allErrs = append(allErrs, err)
+	}
+	if err := r.validateCronJobSpec(); err != nil {
+		allErrs = append(allErrs, err)
+	}
+	if len(allErrs) == 0 {
+		return nil
+	}
+
+	return apierrors.NewInvalid(
+		schema.GroupKind{Group: "batch.tutorial.kubebuilder.io", Kind: "CronJob"},
+		r.Name, allErrs)
+}
+
+func (r *CronJob) validateCronJobSpec() *field.Error {
+	// The field helpers from the kubernetes API machinery help us return nicely
+	// structured validation errors.
+	return validateScheduleFormat(
+		r.Spec.Schedule,
+		field.NewPath("spec").Child("schedule"))
+}
+
+func validateScheduleFormat(schedule string, fldPath *field.Path) *field.Error {
+	if _, err := cron.ParseStandard(schedule); err != nil {
+		return field.Invalid(fldPath, schedule, err.Error())
+	}
+	return nil
+}
+
+func (r *CronJob) validateCronJobName() *field.Error {
+	if len(r.ObjectMeta.Name) > validationutils.DNS1035LabelMaxLength-11 {
+		// The job name length is 63 character like all Kubernetes objects
+		// (which must fit in a DNS subdomain). The cronjob controller appends
+		// a 11-character suffix to the cronjob (`-$TIMESTAMP`) when creating
+		// a job. The job name length limit is 63 characters. Therefore cronjob
+		// names must have length <= 63-11=52. If we don't validate this here,
+		// then job creation will fail later.
+		return field.Invalid(field.NewPath("metadata").Child("name"), r.Name, "must be no more than 52 characters")
+	}
+	return nil
+}
+
+// +kubebuilder:docs-gen:collapse=Existing Defaulting and Validation

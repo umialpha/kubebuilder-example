@@ -1,17 +1,15 @@
 /*
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+// +kubebuilder:docs-gen:collapse=Apache License
 
 package v1
 
@@ -29,8 +27,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
-// log is for logging in this package.
+// +kubebuilder:docs-gen:collapse=Go imports
+
 var cronjoblog = logf.Log.WithName("cronjob-resource")
+
+/*
+This setup is doubles as setup for our conversion webhooks: as long as our
+types implement the
+[Hub](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion#Hub) and
+[Convertible](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion#Convertible)
+interfaces, a conversion webhook will be registered.
+*/
 
 func (r *CronJob) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).
@@ -38,10 +45,8 @@ func (r *CronJob) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-
-// +kubebuilder:webhook:path=/mutate-batch-tutorial-kubebuilder-io-v1-cronjob,mutating=true,failurePolicy=fail,groups=batch.tutorial.kubebuilder.io,resources=cronjobs,verbs=create;update,versions=v1,name=mcronjob.kb.io
-
+/*
+ */
 var _ webhook.Defaulter = &CronJob{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
@@ -91,10 +96,6 @@ func (r *CronJob) ValidateDelete() error {
 	return nil
 }
 
-/*
-We validate the name and the spec of the CronJob.
-*/
-
 func (r *CronJob) validateCronJob() error {
 	var allErrs field.ErrorList
 	if err := r.validateCronJobName(); err != nil {
@@ -112,15 +113,6 @@ func (r *CronJob) validateCronJob() error {
 		r.Name, allErrs)
 }
 
-/*
-Some fields are declaratively validated by OpenAPI schema.
-You can find kubebuilder validation markers (prefixed
-with `// +kubebuilder:validation`) in the [API](api-design.md)
-You can find all of the kubebuilder supported markers for
-declaring validation by running `controller-gen crd -w`,
-or [here](/reference/markers/crd-validation.md).
-*/
-
 func (r *CronJob) validateCronJobSpec() *field.Error {
 	// The field helpers from the kubernetes API machinery help us return nicely
 	// structured validation errors.
@@ -129,25 +121,12 @@ func (r *CronJob) validateCronJobSpec() *field.Error {
 		field.NewPath("spec").Child("schedule"))
 }
 
-/*
-We'll need to validate the [cron](https://en.wikipedia.org/wiki/Cron) schedule
-is well-formatted.
-*/
-
 func validateScheduleFormat(schedule string, fldPath *field.Path) *field.Error {
 	if _, err := cron.ParseStandard(schedule); err != nil {
 		return field.Invalid(fldPath, schedule, err.Error())
 	}
 	return nil
 }
-
-/*
-Validating the length of a string field can be done declaratively by
-the validation schema.
-But the `ObjectMeta.Name` field is defined in a shared package under
-the apimachinery repo, so we can't declaratively validate it using
-the validation schema.
-*/
 
 func (r *CronJob) validateCronJobName() *field.Error {
 	if len(r.ObjectMeta.Name) > validationutils.DNS1035LabelMaxLength-11 {
@@ -161,3 +140,5 @@ func (r *CronJob) validateCronJobName() *field.Error {
 	}
 	return nil
 }
+
+// +kubebuilder:docs-gen:collapse=Existing Defaulting and Validation
