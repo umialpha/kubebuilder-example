@@ -11,7 +11,7 @@ limitations under the License.
 */
 // +kubebuilder:docs-gen:collapse=Apache License
 
-package v1
+package v2
 
 import (
 	batchv1beta1 "k8s.io/api/batch/v1beta1"

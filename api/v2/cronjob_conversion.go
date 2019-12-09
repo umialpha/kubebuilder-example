@@ -13,17 +13,38 @@ limitations under the License.
 
 package v2
 
+/*
+For imports, we'll need the controller-runtime
+[`conversion`](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion)
+package, plus the API version for our hub type (v1), and finally some of the
+standard packages.
+*/
 import (
 	"fmt"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 
-	"kubebuilder-example/api/v1"
+	v1 "kubebuilder-example/api/v1"
 )
 
-func (src *CronJob) ConverTo(dstRow conversion.Hub) {
-	dst := dstRow.(*v1.CronJob)
+// +kubebuilder:docs-gen:collapse=Imports
+
+/*
+Our "spoke" versions need to implement the
+[`Convertible`](https://godoc.org/sigs.k8s.io/controller-runtime/pkg/conversion#Convertible)
+interface.  Namely, they'll need `ConvertTo` and `ConvertFrom` methods to convert to/from
+the hub version.
+*/
+
+/*
+ConvertTo is expected to modify its argument to contain the converted object.
+Most of the conversion is straightforward copying, except for converting our changed field.
+*/
+// ConvertTo converts this CronJob to the Hub version (v1).
+func (src *CronJob) ConvertTo(dstRaw conversion.Hub) error {
+	dst := dstRaw.(*v1.CronJob)
+
 	sched := src.Spec.Schedule
 	scheduleParts := []string{"*", "*", "*", "*", "*"}
 	if sched.Minute != nil {
@@ -42,6 +63,10 @@ func (src *CronJob) ConverTo(dstRow conversion.Hub) {
 		scheduleParts[4] = string(*sched.DayOfWeek)
 	}
 	dst.Spec.Schedule = strings.Join(scheduleParts, " ")
+
+	/*
+		The rest of the conversion is pretty rote.
+	*/
 	// ObjectMeta
 	dst.ObjectMeta = src.ObjectMeta
 
