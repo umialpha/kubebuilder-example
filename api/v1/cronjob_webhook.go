@@ -55,7 +55,7 @@ func (r *CronJob) Default() {
 		r.Spec.Suspend = new(bool)
 	}
 	if r.Spec.SuccessfulJobsHistoryLimit == nil {
-		r.Spec.SuccessfulJobHistoryLimit = new(int32)
+		r.Spec.SuccessfulJobsHistoryLimit = new(int32)
 		*r.Spec.SuccessfulJobsHistoryLimit = 3
 	}
 	if r.Spec.FailedJobsHistoryLimit == nil {
